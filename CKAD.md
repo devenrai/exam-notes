@@ -110,7 +110,7 @@ docker tag <NAME_OF_IMAGE>:<TAG> <SOME_NEW_NAME>:<NEW_TAG>
 docker tag pinger:latest local-registry:5000/pinger:v1
 ```
 To push the image to remote image repository
-```
+```30002
 docker push <SOME_NEW_NAME>:<NEW_TAG>
 docker push local-registry:5000/pinger:v1
 ```
@@ -179,3 +179,72 @@ kubectl scale deploy wonderful-v1 --replicas=0
 Switch happens immediately, hence BLUE/GREEN rollout
 
   #### Rollout Canary
+
+### ReplicaSets
+We describe a desired state in a Deployment, and the Deployment Controller changes the actual state of the deployment and underlying replicaSet. A replicaSet creates the underlying pods, ensuring that the desired number of identical pods are stable and running at all times.
+```
+kubectl create deploy <dep-name> --namespace <namespace> --image=some-image:v1
+```
+This will create a pod and a replicaset with just 1 replica, which we can scale up and down resulting in updaing the background replicaset
+```
+kubectl get deploy,pods,rs -n <namespace>
+NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/dep-name  1/1     1            1           20s
+
+NAME                           READY   STATUS    RESTARTS   AGE
+pod/dep-name-58459b8658-6pbmd   1/1     Running   0          20s
+
+NAME                                DESIRED   CURRENT   READY   AGE
+replicaset.apps/dep-name-58459b8658   1         1         1       20s
+```
+Now let's scale the deployment and notice the update on replicaset, which goes to 3
+```
+kubectl scale deployment scaler --namespace session283884 --replicas 3
+kubectl get rs -n <namespace>
+NAME                                DESIRED   CURRENT   READY   AGE
+replicaset.apps/dep-name-58459b8658   3         3         3       93s
+```
+## Creating and managing simple k8 resources
+
+### Pod
+Command to create a pod within a given namespace
+```
+kubectl create namespace <namespace>
+kubectl run --namespace <namespace> --image=nginx:1.17 <pod-name>
+```
+Command to delete all the pods within a given namespace
+```
+kubectl -n <namespace> delete pods --all
+```
+Command to sort the list of pods with some field value ( sorting in descending order)
+```
+kubectl get pods -n <namespace> --sort-by=.status.containerStatuses[0].restartCount       ** We are sorting in a descending order by restartCounts.
+```
+
+### Deployment
+command to create a deployment within a given namespace and with a given number of replicas
+```
+kubectl create ns <namespace>
+kubectl create deploy --namespace <namespace> --image nginx:1.18 --replicas 3 <deploy-name>
+```
+Scaling up the deployment
+```
+kubectl scale deploy --replicas=5 -n <namespace> <deploy-name>
+```
+Update image of the deployment pods
+```
+kubectl set image --namespace <namespace> deployment/<deploy-name> nginx=nginx:1.19
+```
+### Service
+ClusterIp --> exposes the service but only reachable within the K8 cluster
+```
+kubectl expose deployment <deply-name> --name=<service-name>  --type=ClusterIP --port=80  --target-port=80  -n <namespace>
+```
+Confirm the service is targeting the pods with endpoints
+```
+kubectl get endpoints <service-name> -n <namespace>
+NAME          ENDPOINTS                                         AGE
+service-name  192.168.0.11:80,192.168.0.57:80,192.168.0.86:80   4m10s
+```
+NOTE: Endpoints is deprecated in v1.33+ kubernetes versions
+
