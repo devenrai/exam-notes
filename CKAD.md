@@ -220,6 +220,28 @@ Command to sort the list of pods with some field value ( sorting in descending o
 ```
 kubectl get pods -n <namespace> --sort-by=.status.containerStatuses[0].restartCount       ** We are sorting in a descending order by restartCounts.
 ```
+Command to create a pod in a given namespace with a command
+```kubectl -n <namespace> run <pod-name> --image=busybox --restart=Never -- sleep 3600
+```
+Command to add prestop lifecycle to a pod, a hook that gets triggered before the pod dies. In this usecase we are just going to make the pod sleep for 10s
+```
+spec:
+  containers:
+  - name: nginx-with-prestop
+    image: nginx
+    lifecycle:
+      preStop:
+        exec:
+          command: ["/bin/sh","-c","sleep 10"]
+```
+Create a pod with the labels
+```
+kubectl run <pod-name> --image nginx --namespace <namespace> --labels="app=frontend,tier=web"
+```
+Labeling a pod with additional label, if already exists.
+```
+kubectl -n <namespace> label pod <pod-name> service=core-app
+```
 
 ### Deployment
 command to create a deployment within a given namespace and with a given number of replicas
@@ -247,4 +269,5 @@ NAME          ENDPOINTS                                         AGE
 service-name  192.168.0.11:80,192.168.0.57:80,192.168.0.86:80   4m10s
 ```
 NOTE: Endpoints is deprecated in v1.33+ kubernetes versions
+
 
