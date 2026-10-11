@@ -92,6 +92,19 @@ Create deployment with readiness probes
           initialDelaySeconds: 10
           periodSeconds: 5
 ```
+Rather than a command it also be just probe to a path, for example - 
+```
+  spec:
+      containers:
+      - image: nginx
+        name: nginx-readiness
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80                  # simple readiness probe (httpGet) to root path on port 80
+          initialDelaySeconds: 10
+          periodSeconds: 5
+```
 ---
 ### Docker basics
 Dockerfile
@@ -242,6 +255,92 @@ Labeling a pod with additional label, if already exists.
 ```
 kubectl -n <namespace> label pod <pod-name> service=core-app
 ```
+Port forward on to local machine
+``` 
+kubectl port-forward pod/<POD-NAME> <TARGET-PORT> <LOCAL-PORT> 
+```
+Retrieve logs from pods
+``` 
+kubectl log pod/<POD-NAME>                # to retrieve current logs from the pod
+kubectl log pod/<POD-NAME> --previous     # --previous will retrieve older logs 
+``` 
+Attaching a debug container to another container within a pod
+```
+kubectl debug pod/<POD-NAME> -ti --image <IMAGE-FOR-DEBUGGER-CONTAINER> -c <DEBUG-CONTAINER-NAME> --target <TARGET-CONTAINER>
+```
+### Multi container pod
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-containers-pod
+spec:
+  containers:
+    - image: nginx
+      name: nginx-container
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 80
+      resources:
+        limits:
+          cpu: "1"
+        requests:
+          cpu: 500m
+    - image: alpine
+      name: alpine-container
+      command: 
+        - /bin/sh 
+        - -c
+        - | 
+          counter=0; 
+          while [ $counter -lt 10 ]; 
+          do 
+            echo "Time elapsed: $counter"; 
+            sleep 1; 
+            counter=$((counter + 1)); 
+          done;  
+          echo "end of counter time";
+  restartPolicy: Never
+```
+### LimitRange 
+We can also create K8 resource - LimitRange that will set some defaults and apply to container level
+```
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: limit-range
+spec:
+  limits:
+  - default: 
+      cpu: 500m
+    defaultRequest: 
+      cpu: 500m
+    max: 
+      cpu: "1"
+    min:
+      cpu: 100m
+    type: Container
+```
+Now if you create a pod with containers, it will get the default from the LimitRange K8 resource. However this can be overridden on the pod
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mypod
+spec:
+  containers:
+  - image: nginx
+    name: nginx
+    resources:
+      requests:       # Point to note, we have both requests and limits declare and the new value is between 100m and 1, so the container takes 600m as new cpu value
+        cpu: 600m
+      limits:
+        cpu: 600m
+  restartPolicy: Always
+```
+We can also set the limit range on a namespace level. Create the LimitRange as per above manifest but apply it to the namespace instead. 
+``` kubectl apply -f limit.yaml --namespace constraints ```
 
 ### Deployment
 command to create a deployment within a given namespace and with a given number of replicas
@@ -270,4 +369,36 @@ service-name  192.168.0.11:80,192.168.0.57:80,192.168.0.86:80   4m10s
 ```
 NOTE: Endpoints is deprecated in v1.33+ kubernetes versions
 
+## Usage of explain command
 
+``` kubectl explain pod.spec.containers``` lookup for documentation of containers field of a pod spec
+
+### Service Account
+Application running in a pod (needs to query K8 API) --> uses Service Account identity --> Permission checked by RBAC --> Allows/denies the action (K8 API Server)
+To create a K8 Service Account
+``` 
+kubectl create sa <SERVICE-ACCOUNT-NAME> -n <NAMESPACE> 
+```
+
+Attach the service account with a pod spec.ServiceAccountName
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod
+  namespace: <NAMESPACE>
+spec:
+  containers:
+    - image: nginx
+      name: pod
+  serviceAccountName: <SERVICE-ACCOUNT-NAME>
+  restartPolicy: Always
+```
+
+### Roles and Roles bindings
+We can set a role with specific permission such as - read pods, attach to a service with the role bindings
+Roles (with permissions) --> Role bindings to link it up with a service account --> service account with can be linked with pod
+```
+kubectl create role <ROLE-NAME> -n <NAMESPACE> --verb=get --verb=list --verb=watch --resource=pods
+kubectl create rolebinding <BINDING-NAMEae> -n <NAMESPACE> --role=<ROLE-NAME> --serviceaccount=<NAMESPACE>:<SERVICE-ACCOUNT-NAME>
+```
