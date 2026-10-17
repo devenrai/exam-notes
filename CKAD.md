@@ -268,6 +268,43 @@ Attaching a debug container to another container within a pod
 ```
 kubectl debug pod/<POD-NAME> -ti --image <IMAGE-FOR-DEBUGGER-CONTAINER> -c <DEBUG-CONTAINER-NAME> --target <TARGET-CONTAINER>
 ```
+#### Security Context
+We can put security context when spinning up a pod for example
+* In this example we have limited all the linux capabilities apart from chown
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+    - image: nginx
+      name: nginx-container
+      securityContext:
+        capabilities:
+          drop:
+            - ALL
+          add:
+            - CHOWN
+  restartPolicy: Never
+```
+Here we have made the root file system as readonly 
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ubuntu-pod
+spec:
+  containers:
+    - image: ubuntu
+      name: ubuntu-container
+      securityContext:
+        readOnlyRootFilesystem: true
+  restartPolicy: Never
+```
+#### PodSecurity restricted namespace
+Namespace can be labeled to implement PodSecurity that prohibits 
+
 ### Multi container pod
 ```
 apiVersion: v1
@@ -369,6 +406,33 @@ service-name  192.168.0.11:80,192.168.0.57:80,192.168.0.86:80   4m10s
 ```
 NOTE: Endpoints is deprecated in v1.33+ kubernetes versions
 
+#### externalName service type
+The main benefit of externalName type service is : your application depends on your internal service name, not on the external provider's hostname. So even if the external provider changes all we need to do is point the service to a different provider. For example
+```
+ kubectl create svc externalname external-search --external-name www.google.com --dry-run=client -o yaml      #this will create a service that points towards google.com
+ nslookup external-search.default.svc.cluster.local         #this will resolve to www.google.com
+
+ kubectl edit svc external-search
+
+ apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: external-search
+  name: external-search
+  namespace: externalname-demo
+spec:
+  externalName: www.example.com                       # point this to a different provider www.example.com
+  selector:
+    app: external-search
+  type: ExternalName
+status:
+  loadBalancer: {}
+
+nslookup external-search.default.svc.cluster.local         #this will now resolve to www.example.com
+ 
+```
+
 ## Usage of explain command
 
 ``` kubectl explain pod.spec.containers``` lookup for documentation of containers field of a pod spec
@@ -401,4 +465,125 @@ Roles (with permissions) --> Role bindings to link it up with a service account 
 ```
 kubectl create role <ROLE-NAME> -n <NAMESPACE> --verb=get --verb=list --verb=watch --resource=pods
 kubectl create rolebinding <BINDING-NAMEae> -n <NAMESPACE> --role=<ROLE-NAME> --serviceaccount=<NAMESPACE>:<SERVICE-ACCOUNT-NAME>
+```
+## Network rules
+All the ingress and egress traffic are blocked if the policyTypes are mentioned and the actual rules are empty array [], which means block all
+```
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: payments
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress                #Both ingress and egress rules are included
+  - Egress
+  ingress: []              #Leaving this empty or not including it all means traffic restricted by default. 
+  egress: []               #hence, both ingress and egress traffic are blocked in this case
+```
+Now, if we want to allow traffic from certain namespace, we can use ```spec.ingress.from.namespaceSelector.matchLabels``` to match the namespace labels.
+We can have mutliple namespaces allowed the access as show below
+```
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:  
+  name: allow-namespace-traffic
+  namespace: allow-ns  
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          access: granted
+    - namespaceSelector:
+        matchLabels:
+          access: temp-granted
+    ports:
+    - port: 80
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+  - Ingress
+```
+if the incoming traffic is coming from the same namespace then we can use podSelector instead ```spec.ingress.from.podSelector.matchLabels``` to match the labels on a pod.
+```
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:  
+  name: allow-namespace-traffic
+  namespace: match-label          
+spec:
+  ingress:
+  - from:
+    - podSelector:                     # bear in mind the pods should be in the same namespace where rest of the other resources are, for this network policy to work. 
+        matchLabels:
+          access: granted    
+    ports:
+    - port: 80
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+  - Ingress
+```
+## StatefulSet
+If each replica needs its own identity or storage - StatefulSet can be considered rather than a deployment. Headless Service:  is commonly used with StatefulSets when stable DNS names for individual Pods are needed. StatefulSets like deployments can also be associated with serviceAccountName in order for pods to get an identity within K8, it will be useful to access resources protected by RBAC.
+
+### Headless service
+Headless service can be used with StatefulSets. Headless service allows connection to individual pods using their DNS records or ip address rather than one single service IP (which we get from normal service). Normally used for databases, apache kafka etc.
+DNS resolution can resolved with results something similar as below, which represents invidual pods within the statefulset - 
+```
+$ nslookup mysql.default.svc.cluster.local
+
+mysql-0.mysql.default.svc.cluster.local         #pod1 within the statefulset
+mysql-1.mysql.default.svc.cluster.local         #pod2 within the statefulset
+mysql-2.mysql.default.svc.cluster.local         #pod3 within the statefulset
+```
+
+```
+kubectl create svc clusterip web --namespace stateful-demo --clusterip="None" --dry-run=client -o yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: web
+  name: web
+  namespace: stateful-demo
+spec:
+  clusterIP: None                      #This means it is a headless service
+  selector:
+    app: web
+  type: ClusterIP
+status:
+  loadBalancer: {}
+```
+```
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: web
+  name: web
+  namespace: stateful-demo
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      serviceAccountName: web-sa       # We can now associated web-sa service account with necessary roles and rolebindings to control the access on K8 resources.
+      containers:
+      - image: nginx:1.25
+        name: nginx
+        ports:
+        - containerPort: 80
 ```
