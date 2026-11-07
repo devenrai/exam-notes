@@ -406,6 +406,47 @@ service-name  192.168.0.11:80,192.168.0.57:80,192.168.0.86:80   4m10s
 ```
 NOTE: Endpoints is deprecated in v1.33+ kubernetes versions
 
+Nodeport --> exposes the service on a specific port on every node in the K8 cluster, allowing the access to the application from outside the cluster. Not ideal in terms of design, because that will allow external application to access via the node's IP directy. Better approach would be LB --> Ingress Controller/GW -->  ClusterIP --> application pod
+```
+kubectl create svc nodeport <NAME> --tcp=<PORT>:<TARGET-PORT-ON-DEPLOYMENT> --dry-run=client -o yaml > svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: web
+  name: <NAME>
+spec:
+  ports:
+  - name: 32080-80
+    port: 32080
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: web                        # selector should point to the deployment label
+  type: NodePort
+```
+#### Ingress rule to control the ingress traffic
+```
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-ingress
+  namespace: ingress-host-routing
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: web.example.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: web-svc
+            port:
+              number: 80
+        path: /
+        pathType: Prefix
+```
+
 #### externalName service type
 The main benefit of externalName type service is : your application depends on your internal service name, not on the external provider's hostname. So even if the external provider changes all we need to do is point the service to a different provider. For example
 ```
@@ -587,3 +628,99 @@ spec:
         ports:
         - containerPort: 80
 ```
+## Secret
+Create secret within K8
+```
+kubectl create secret tls <NAME> --cert=path/to/tls.crt --key=path/to/tls.key
+```
+## Kustomise
+### Patch image with Kustomize
+Navigate to where the original manifest ( in this case a deployment ) is located. Ensure kustomize binary is already installed in the environment. 
+```
+kustomize init --resources deploy.yaml
+```
+This will create a baremetal kustomization.yaml file which has the resource pointed towards the deploy.yaml
+```
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deploy.yaml
+```
+Now to patch the image
+```
+kustomize edit set image nginx:1.23=nginx:1.24
+```
+This will add the information on what to update on the kustomization.yaml manifest
+```
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deploy.yaml
+images:
+- name: nginx:1.23
+  newName: nginx
+  newTag: "1.24"
+```
+Now we can build from the kustomization.yaml manifest to evaluate the new changes
+```
+kustomize build . 
+```
+Finally to apply the changes
+```
+kustomize build . | kubectl apply -f -
+```
+### Create kustomize overlays (dev and prod)
+We will need the folder structure for base and rest of the overlays (dev and prod)
+```
+my-kustomize-project/
+├── base/
+│   ├── deployment.yaml
+│   └── kustomization.yaml
+├── overlays/
+│   ├── dev/
+│   │   └── kustomization.yaml
+│   └── prod/
+│       └── kustomization.yaml
+```
+For base kustomization.yaml should be pointing to the deployment manifest on base folder. And the overlays can point to the same manifest by just pointing the resource to the base (i.e base/kustomization.yaml)
+
+```
+kustomize init --resource ../../base                        #this will point the resource to the base kustomization.yaml manifest
+kustomize edit set namespace dev                            #creates the namespace change for the overlay - dev. Same effect for rest of the other edits. 
+kustomize edit set nameprefix dev-                          
+kustomize edit set image nginx:1.24=nginx:latest
+```
+Similar sort of changes can be done for the prod overlay
+
+### Update ConfigMap Secret with Kustomise
+Once the kustomisation.yaml is created/initialised with the necessary deployment or pod manifest. We can create the configmap and secret using kustomize. 
+```
+kustomize edit add secret nginx-secret --from-literal=CREDS=SecretPass123
+kustomize edit add configmap nginx-cm --from-literal=APP_NAME=my_app
+```
+Now after the configmap and the secret are created, we can use this to create the environment variable
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: nginx-app
+  name: nginx-app
+spec:
+  containers:
+  - image: nginx:1.24
+    name: nginx-app
+    envFrom:
+      - configMapRef:
+          name: <CONFIG-NAME>
+      - secretRef:
+          name: <SECRET-NAME>
+  restartPolicy: Always
+```
+### Add commonLabels with Kustomise
+To add labels to all the resources that kustomization.yaml manages, you can simply invoke following command.
+```
+kustomize edit add label <NEW_LABEL_KEY>:<NEW_LABEL_VALUE>
+kustomize build . | kubectl apply -f -
+```
+
